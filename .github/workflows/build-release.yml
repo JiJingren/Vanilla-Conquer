@@ -1,0 +1,44 @@
+name: build-release
+
+on:
+  push:
+    branches: [ vanilla ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y g++ cmake ninja-build libsdl2-dev libopenal-dev zip
+
+      - name: Build
+        env:
+          CC: gcc
+          CXX: g++
+        run: cmake --workflow --preset release
+
+      - name: Package
+        run: |
+          mkdir -p artifact
+          cp build/release/RelWithDebInfo/vanillatd build/release/RelWithDebInfo/vanillara artifact/
+          strip --strip-all artifact/vanillatd artifact/vanillara
+          cd artifact
+          zip -9 ../vanilla-conquer-linux-x86_64.zip vanillatd vanillara
+
+      - name: Upload release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-latest
+          name: Vanilla Conquer (Linux x86_64 build)
+          body: |
+            Automated build of Vanilla Conquer (Red Alert 1 + Tiberian Dawn) for Linux x86_64.
+            Built with gcc, SDL2 + OpenAL, on ubuntu-22.04.
+          files: vanilla-conquer-linux-x86_64.zip
