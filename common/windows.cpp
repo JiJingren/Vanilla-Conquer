@@ -819,6 +819,15 @@ static void Flush_Line(void)
         }
     }
 
+    /*
+    **	A line break can land between the bytes of a multibyte (UTF-8)
+    **	character.  Back up to the leading byte so that no partial sequence
+    **	is ever handed to the renderer.
+    */
+    while (breakpoint > 0 && ((unsigned char)Line[breakpoint] & 0xC0) == 0x80) {
+        breakpoint--;
+    }
+
     breakchar = Line[breakpoint];
     Line[breakpoint] = '\0';
 

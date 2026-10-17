@@ -30,8 +30,9 @@ jobs:
           mkdir -p artifact
           cp build/release/RelWithDebInfo/vanillatd build/release/RelWithDebInfo/vanillara artifact/
           strip --strip-all artifact/vanillatd artifact/vanillara
+          cp zh_cn/cjkfont.dat zh_cn/CONQUER.ENG artifact/
           cd artifact
-          zip -9 ../vanilla-conquer-linux-x86_64.zip vanillatd vanillara
+          zip -9 ../vanilla-conquer-linux-x86_64.zip vanillatd vanillara cjkfont.dat CONQUER.ENG
 
       - name: Upload release
         uses: softprops/action-gh-release@v2
@@ -41,4 +42,8 @@ jobs:
           body: |
             Automated build of Vanilla Conquer (Red Alert 1 + Tiberian Dawn) for Linux x86_64.
             Built with gcc, SDL2 + OpenAL, on ubuntu-22.04.
+
+            Ships with Simplified Chinese text support. Copy `cjkfont.dat` and
+            `CONQUER.ENG` from this zip into your game data folder (the same
+            folder as `main.mix`) to enable Chinese UI text.
           files: vanilla-conquer-linux-x86_64.zip

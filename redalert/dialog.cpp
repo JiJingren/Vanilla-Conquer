@@ -775,7 +775,8 @@ void Conquer_Clip_Text_Print(char const* text,
                 int w = 0;
                 char* bptr = source;
                 do {
-                    w += Char_Pixel_Width(*bptr++);
+                    w += Char_Pixel_Width(*bptr);
+                    bptr = (char*)Next_Text_Char(bptr);
                 } while (*bptr && offset + w < (unsigned)width);
 
                 /*
@@ -783,7 +784,7 @@ void Conquer_Clip_Text_Print(char const* text,
                 **	character and signal that further processing is not necessary.
                 */
                 if (offset + w >= (unsigned)width) {
-                    bptr--;
+                    bptr = (char*)Previous_Text_Char(bptr);
                     w -= Char_Pixel_Width(*bptr);
                     *bptr = '\0';
                     processing = 0;

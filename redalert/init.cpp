@@ -2449,7 +2449,6 @@ static void Bootstrap(void)
     **	Fetch the language text from the hard drive first. If it cannot be
     **	found on the hard drive, then look for it in the mixfile.
     */
-#ifdef STEVES_LOAD_OVERRIDE
     RawFileClass strings("CONQUER.ENG");
     if (strings.Is_Available()) {
         SystemStrings = new char[strings.Size()];
@@ -2457,10 +2456,12 @@ static void Bootstrap(void)
     } else {
         SystemStrings = (char const*)MFCD::Retrieve(Language_Name("CONQUER"));
     }
-#else
-    SystemStrings = (char const*)MFCD::Retrieve(Language_Name("CONQUER"));
-#endif
     DebugStrings = (char const*)MFCD::Retrieve("DEBUG.ENG");
+
+    /*
+    **	Load the optional CJK bitmap font used to render UTF-8 encoded text.
+    */
+    Load_CJK_Font("cjkfont.dat");
 
     /*
     **	Default palette initialization.

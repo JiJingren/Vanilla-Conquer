@@ -867,7 +867,7 @@ int Format_Window_String_New(const char* string,
             if (linelen <= 0) {
                 //	We could not find a nice break point.
                 //	Go back one char from over-the-end point and add in a break there.
-                string = stringOverEnd - 1;
+                string = Previous_Text_Char(stringOverEnd);
                 if (iExtraChars > 0)
                     iExtraChars--; //	One less to make use of later.
                 else

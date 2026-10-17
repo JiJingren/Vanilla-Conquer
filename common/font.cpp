@@ -38,6 +38,7 @@
 #include "file.h"
 #include "memflag.h"
 #include "endianness.h"
+#include "rawfile.h"
 
 #include <errno.h>
 #include <string.h>
@@ -69,6 +70,139 @@ unsigned char ColorXlat[16][16] = {
     {14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
     {15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 };
+
+/*
+**	Optional CJK/UTF-8 bitmap font support. When a font data file is loaded via
+**	Load_CJK_Font(), any UTF-8 encoded multibyte character (typically CJK) is
+**	rendered using this font instead of the single byte game font. The file
+**	format is a flat dump:
+**	  'C' 'J' 'K' 'F', u16 width, u16 height, u32 count,
+**	  count * { u32 codepoint, height * u16 rows (MSB first) }
+*/
+static const unsigned char* CJKFontData = nullptr;
+static const unsigned char* CJKEntries = nullptr;
+static unsigned short CJKFontWidth = 0;
+static unsigned short CJKFontHeight = 0;
+static unsigned int CJKFontCount = 0;
+static int CJKFontStride = 0;
+static bool CJKFontLoaded = false;
+
+void Load_CJK_Font(char const* name)
+{
+    RawFileClass file(name);
+
+    if (!file.Is_Available()) {
+        return;
+    }
+
+    int size = file.Size();
+
+    if (size < 12) {
+        return;
+    }
+
+    unsigned char* buffer = new unsigned char[size];
+
+    if (file.Read(buffer, size) != size) {
+        delete[] buffer;
+        return;
+    }
+
+    if (buffer[0] != 'C' || buffer[1] != 'J' || buffer[2] != 'K' || buffer[3] != 'F') {
+        delete[] buffer;
+        return;
+    }
+
+    unsigned short width = (unsigned short)(buffer[4] | (buffer[5] << 8));
+    unsigned short height = (unsigned short)(buffer[6] | (buffer[7] << 8));
+    unsigned int count = (unsigned int)buffer[8] | ((unsigned int)buffer[9] << 8) | ((unsigned int)buffer[10] << 16)
+                         | ((unsigned int)buffer[11] << 24);
+    int stride = 4 + height * 2;
+
+    if (width == 0 || height == 0 || count == 0 || 12 + (long)count * stride > size) {
+        delete[] buffer;
+        return;
+    }
+
+    if (CJKFontData != nullptr) {
+        delete[] CJKFontData;
+    }
+
+    CJKFontData = buffer;
+    CJKEntries = buffer + 12;
+    CJKFontWidth = width;
+    CJKFontHeight = height;
+    CJKFontCount = count;
+    CJKFontStride = stride;
+    CJKFontLoaded = true;
+}
+
+/*
+**	Binary searches the loaded CJK font for the supplied codepoint. Returns a
+**	pointer to the raw glyph rows, or nullptr if the codepoint is not present.
+*/
+static const unsigned char* CJK_Find(unsigned int codepoint)
+{
+    if (!CJKFontLoaded) {
+        return nullptr;
+    }
+
+    int lo = 0;
+    int hi = (int)CJKFontCount - 1;
+
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        const unsigned char* entry = CJKEntries + (long)mid * CJKFontStride;
+        unsigned int value = (unsigned int)entry[0] | ((unsigned int)entry[1] << 8) | ((unsigned int)entry[2] << 16)
+                             | ((unsigned int)entry[3] << 24);
+
+        if (value == codepoint) {
+            return entry + 4;
+        }
+
+        if (value < codepoint) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+
+    return nullptr;
+}
+
+/*
+**	Decodes a single UTF-8 encoded codepoint and advances the string pointer past
+**	it. Malformed or truncated sequences are treated as a single raw byte so that
+**	the caller can never walk off the end of the buffer.
+*/
+static unsigned int UTF8_Decode(char const** string)
+{
+    const unsigned char* p = (const unsigned char*)*string;
+    unsigned int c = p[0];
+
+    if (c < 0x80) {
+        *string += 1;
+        return c;
+    }
+
+    if ((c & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) {
+        *string += 2;
+        return ((c & 0x1F) << 6) | (p[1] & 0x3F);
+    }
+
+    if ((c & 0xF0) == 0xE0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+        *string += 3;
+        return ((c & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+    }
+
+    if ((c & 0xF8) == 0xF0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80) {
+        *string += 4;
+        return ((c & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+    }
+
+    *string += 1;
+    return c;
+}
 
 /***************************************************************************
  * SET_FONT -- Changes the default text printing font.                     *
@@ -133,9 +267,79 @@ void* Set_Font(void const* fontptr)
  *=========================================================================*/
 int Char_Pixel_Width(char chr)
 {
-    int width = (unsigned char)*(FontWidthBlockPtr + (unsigned char)chr) + FontXSpacing;
+    unsigned char c = (unsigned char)chr;
 
-    return (width);
+    if (c < 0x80) {
+        return (unsigned char)*(FontWidthBlockPtr + c) + FontXSpacing;
+    }
+
+    if (c < 0xC0) {
+        /*
+        **	UTF-8 continuation byte. Its width is accounted for by the leading
+        **	byte of the multibyte sequence, so it contributes nothing here.
+        */
+        return 0;
+    }
+
+    /*
+    **	Leading byte of a multibyte UTF-8 sequence (typically CJK). Report the
+    **	full width of the glyph so byte oriented width calculations stay correct.
+    */
+    return (CJKFontLoaded ? CJKFontWidth : FontWidth) + FontXSpacing;
+}
+
+/***************************************************************************
+ * NEXT_TEXT_CHAR -- Step forward one whole (possibly multibyte) character. *
+ *                                                                         *
+ *    Text wrapping code frequently walks raw bytes and then chops the     *
+ *      string at an arbitrary byte.  These two helpers let it move in     *
+ *      whole characters instead so a split never lands in the middle of   *
+ *      a UTF-8 sequence.                                                 *
+ *                                                                         *
+ * INPUT:      Pointer to the first byte of a character.                  *
+ *                                                                         *
+ * OUTPUT:     Pointer to the first byte of the following character.      *
+ ****************************************************************************/
+
+char const* Next_Text_Char(char const* p)
+{
+    if (!p || !*p) {
+        return p;
+    }
+
+    p++;
+
+    /*
+    **	Skip any UTF-8 continuation bytes. Stopping at the terminator keeps
+    **	truncated sequences from walking off the end of the buffer.
+    */
+    while (*p && (((unsigned char)*p) & 0xC0) == 0x80) {
+        p++;
+    }
+
+    return p;
+}
+
+/***************************************************************************
+ * PREVIOUS_TEXT_CHAR -- Step backward one whole (possibly multibyte) char *
+ ****************************************************************************/
+
+char const* Previous_Text_Char(char const* p)
+{
+    if (!p) {
+        return p;
+    }
+
+    p--;
+
+    /*
+    **	Back over the continuation bytes to reach the leading byte.
+    */
+    while (p && (((unsigned char)*p) & 0xC0) == 0x80) {
+        p--;
+    }
+
+    return p;
 }
 
 /***************************************************************************
@@ -370,6 +574,56 @@ int Buffer_Print(void* thisptr, const char* string, int x, int y, int fground, i
                     dst = ydisplace * pitch + offset + x;
                     offset += ydisplace * pitch;
                     fntbottom += ydisplace;
+                }
+
+                // Handle UTF-8 encoded (CJK) characters using the optional CJK font
+                if (char_num >= 0x80 && CJKFontLoaded) {
+                    const char* cjk_string = string - 1;
+                    unsigned int codepoint = UTF8_Decode(&cjk_string);
+                    int cjk_width = CJKFontWidth;
+
+                    // Handle text wrapping for long strings
+                    if (FontXSpacing + cjk_width + x > vp.Get_Width()) {
+                        // We don't handle clipping text, it either draws or it doesn't
+                        if (ydisplace + fntbottom > vp.Get_Height()) {
+                            return 0;
+                        }
+
+                        x = base_x;
+                        dst = ydisplace * pitch + offset + x;
+                        offset += ydisplace * pitch;
+                        fntbottom += ydisplace;
+                        --string;
+                        continue;
+                    }
+
+                    const unsigned char* glyph = CJK_Find(codepoint);
+                    unsigned char cjk_fg = ColorXlat[0][1];
+                    unsigned char cjk_bg = ColorXlat[0][0];
+                    unsigned char* cell_dst = char_dst;
+
+                    for (int ry = 0; ry < CJKFontHeight; ++ry) {
+                        unsigned short row = 0;
+
+                        if (glyph) {
+                            row = (unsigned short)((glyph[ry * 2] << 8) | glyph[ry * 2 + 1]);
+                        }
+
+                        for (int rx = 0; rx < cjk_width; ++rx) {
+                            unsigned char color = (row & (0x8000 >> rx)) ? cjk_fg : cjk_bg;
+
+                            if (color) {
+                                cell_dst[rx] = color;
+                            }
+                        }
+
+                        cell_dst += pitch;
+                    }
+
+                    string = cjk_string;
+                    dst += FontXSpacing + cjk_width;
+                    x += FontXSpacing + cjk_width;
+                    continue;
                 }
 
                 // Move to the start of the next char

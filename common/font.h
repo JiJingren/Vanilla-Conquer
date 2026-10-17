@@ -57,9 +57,12 @@ class GraphicViewPortClass;
 void* Set_Font(void const* fontptr);
 int Char_Pixel_Width(char chr);
 unsigned int String_Pixel_Width(char const* string);
+char const* Next_Text_Char(char const* p);
+char const* Previous_Text_Char(char const* p);
 void Get_Next_Text_Print_XY(GraphicViewPortClass& vp, unsigned int offset, int* x, int* y);
 void Set_Font_Palette_Range(void const* palette, int start_idx, int end_idx);
 void* Load_Font(char const* name);
+void Load_CJK_Font(char const* name);
 
 /*=========================================================================*/
 /* The following prototypes are for the file: TEXTPRNT.ASM                 */
